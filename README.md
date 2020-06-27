@@ -41,14 +41,8 @@ http://people.csail.mit.edu/hubert/pyaudio/
 NumPy 1.0 (or more recent)
 http://numpy.scipy.org/
 
-
-Optional for MP3 support:
-
-MPEG Audio Decoder (MAD)
-http://www.underbit.com/products/mad/
-
-PyMAD bindings for MAD
-http://spacepants.org/src/pymad/
+ffmpeg installed and in your path
+https://ffmpeg.org/
 
 
 
