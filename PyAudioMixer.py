@@ -20,8 +20,10 @@ several different inputs and outputs.
 
 import time
 import wave
-import thread
-
+try:
+    import thread
+except:
+    import _thread as thread
 import numpy
 import pyaudio
 
@@ -291,10 +293,6 @@ def calc_vol(t, env):
     # volume is linear interpolation between points
     return env[n - 1][1] * (1.0 - f) + env[n][1] * f
 
-def sine(frequency, length, rate, start = 0):
-    factor = frequency * (PI * 2) / rate
-    return numpy.sin(numpy.arange(start, length+start) * factor, dtype=numpy.float)
-
 class Sound:
     """Represents a playable sound"""
 
@@ -436,9 +434,6 @@ class Sound:
          """
          self.data = resample(self.data, scale)
 
-class _Stream:
-    pass
-
 class StreamingSound:
     """Represents a playable sound stream"""
 
@@ -551,7 +546,6 @@ class Mixer:
     
         """
         self.lock.acquire()
-        d = self.micdata
         self.lock.release()
         return numpy.fromstring(self.micdata, dtype=numpy.int16)
         
@@ -565,28 +559,28 @@ class Mixer:
           must be in numpy array of correct length
           
         """
-        rmlist = []
+        rmlist = [] #Sources to be removed
         if not self.init:
             return
-        sz = self.chunksize * self.channels
-        b = numpy.zeros(sz, numpy.float)
+        buffsize = self.chunksize * self.channels
+        buffer = numpy.zeros(buffsize, numpy.float)
         if self.lock is None: return # this can happen if main thread quit first
         self.lock.acquire()
         for sndevt in self.srcs:
-            s = sndevt._get_samples(sz)
+            s = sndevt._get_samples(buffsize)
             if s is not None:
-                b += s
+                buffer += s
             if sndevt.done:
                 rmlist.append(sndevt)
         if extra is not None:
-            b += extra
-        b = b.clip(-32767.0, 32767.0)
+            buffer += extra
+        buffer = buffer.clip(-32767.0, 32767.0)
         for e in rmlist:
             self.srcs.remove(e)
         if self.mic:
-            self.micdata = self.micstream.read(sz)
+            self.micdata = self.micstream.read(buffsize)
         self.lock.release()
-        odata = (b.astype(numpy.int16)).tostring()
+        odata = (buffer.astype(numpy.int16)).tostring()
         # yield rather than block, pyaudio doesn't release GIL
         while self.stream.get_write_available() < self.chunksize: time.sleep(0.001)
         self.stream.write(odata, self.chunksize)
@@ -671,55 +665,6 @@ class Mixer:
         self.chunksize = size
         self.lock.release()
 
-class _DynamicGenerator:
-    def __init__(self, mixer, freq, duration = -1):
-        self.freq = freq
-        self.mixer = mixer
-        self.duration = duration
-        self.samples_remaining = duration * mixer.samplerate
-        self.done = False
-        self.pos = 0
-    
-    def get_samples(self, number_of_samples_requested):
-        number_of_samples = number_of_samples_requested
-
-        if number_of_samples_requested > self.samples_remaining:
-            number_of_samples = self.samples_remaining
-
-        samples = self.generate_samples(number_of_samples)
-        self.pos += number_of_samples
-
-        self.samples_remaining -= number_of_samples_requested    
-        
-        if self.samples_remaining <= 0:
-            self.done = True
-            # In this case we ran out of stream data
-            # append zeros (don't try to be sample accurate for streams)
-            samples = numpy.append(samples, numpy.zeros(-1 * self.samples_remaining, numpy.int16))
-
-        return samples
-
-    def generate_samples(self, number_of_samples):
-        pass
-
-class _FrequencyGenerator(_DynamicGenerator):
-    def generate_samples(self, number_of_samples):
-        return sine(self.freq, number_of_samples, self.mixer.samplerate, self.pos) * (1 << 15)
-        
-class _DTMFGenerator(_DynamicGenerator):
-    tones = {
-        '1': [697, 1209], '2': [697, 1336], '3': [697, 1447],
-        'A': [697, 1633], '4': [770, 1209], '5': [770, 1336],
-        '6': [770, 1447], 'B': [770, 1633], '7': [852, 1209],
-        '8': [852, 1336], '9': [852, 1447], 'C': [852, 1633],
-        '*': [941, 1209], '0': [941, 1336], '#': [941, 1447],
-        'D': [941, 1633],
-    }      
-
-    def generate_samples(self, number_of_samples):
-        return ((sine(self.tones[self.freq][0], number_of_samples, self.mixer.samplerate, self.pos) * (1 << 15)) * .5 
-                + (sine(self.tones[self.freq][1], number_of_samples, self.mixer.samplerate, self.pos) * (1 << 15)) * .5)
-
 class DynamicGenerator:
     """Represents a playable sound stream. Override this class to provide dynamic
     or generated audio streams."""
@@ -727,10 +672,10 @@ class DynamicGenerator:
     def __init__(self, mixer, checks=True):
         """Create new streaming sound from a WAV file or an MP3 file
 
-        The new streaming sound must match the output samplerate
-        and stereo-ness.  You can turn off these checks by setting
-        the keyword checks=False, but the sound will be distorted.
-        
+        The new streaming sound must match the output samplerate()
+        and stereo-ness.  You can turn off these checks by setting()
+        the keyword checks=False, but the sound will be distorted.()
+        ()
         """
         assert(mixer.init == True)
         self.mixer = mixer
@@ -765,13 +710,7 @@ class DynamicGenerator:
         src = self.generator_class(self.mixer, frequency, duration)
         sndevent = Channel(self.mixer, src, env)
         return sndevent
-
-class FrequencyGenerator(DynamicGenerator):
-    generator_class = _FrequencyGenerator
-
-
-class DTMFGenerator(FrequencyGenerator):
-    generator_class = _DTMFGenerator        
+    
 class _MicInput:
     def __init__(self, mixer, device_id, duration = -1):
         self.mixer = mixer
@@ -796,7 +735,7 @@ class _MicInput:
         if not self.samples_remaining < 0 and number_of_samples_requested > self.samples_remaining:
             number_of_samples = self.samples_remaining
 
-        samples = self.stream.read(int(number_of_samples) / self.mixer.channels)
+        samples = self.stream.read(int((number_of_samples) / self.mixer.channels))
         samples = numpy.fromstring(samples, dtype=numpy.int16)
         self.pos += len(samples)
 
@@ -860,28 +799,15 @@ if __name__ == "__main__":
 
     sys.excepthook = log_uncaught_exceptions
 
-    mix = Mixer(stereo=False)
-    mix.start()
-    mix2 = Mixer(stereo=False, output_device_index=4)
+    mix2 = Mixer(stereo=True, output_device_index=17)
     mix2.start()
 
-    mic = MicInput(mix2, 4)
-    mic.play(4, 2)
-    print "ho"
-    time.sleep(5)
-    print "hey"
+    mic = MicInput(mix2, 3)
+    mic.play(4, -1)
+    while True:
+        test = input("Yes or no: ")
+        if test == "no":
+            break
+        else:
+            pass
     mic.stop()
-
-    #snd = FrequencyGenerator(mix)
-    #snd.play(330, 1)
-
-    #snd2 = FrequencyGenerator(mix2)
-    #snd2.play(400, 2)
-    
-    #snd = DTMFGenerator(mix)
-    #snd.play('1', 2)
-    #time.sleep(.75)
-    #snd.play('2', .1)
-    #time.sleep(.75)
-    #snd.play('3', 2)
-    #time.sleep(4)
