@@ -782,19 +782,20 @@ class MicInput(DynamicGenerator):
                     env = [[offset, 0.0], [offset + fadein, volume]]
 
         self.src.set_duration(duration)
-        c = Channel(self.mixer, self.src, env)
-        self.channel = c
-        return c
+        sndevent = Channel(self.mixer, self.src, env)
+        self.channel = sndevent
+        return sndevent
 
     def stop(self):
         self.channel.stop()
 
-if __name__ == "__main__":
-    mix2 = Mixer(stereo=True, output_device_index=17)
-    mix2.start()
+#To get device index please run audiodevicename.py
 
-    mic = MicInput(mix2, 3)
-    mic.play(4, -1)
+if __name__ == "__main__":
+    mix = Mixer(stereo=True, output_device_index=17)
+    mix.start()
+    mic = MicInput(mix, 3)
+    mic.live(1)
     while True:
         test = input("Yes or no: ")
         if test == "no":
