@@ -17,89 +17,14 @@ multiple discrete mixers that can be used when needing to handle
 several different inputs and outputs.
 """
 
-
+import subprocess
 import time
 import wave
-try:
-    import thread
-except:
-    import _thread as thread
+import threading
 import numpy
 import pyaudio
 
-try:
-    import mad
-except:
-    "MP3 streaming disabled"
-
 PI = 3.141592653589793 # Only thing we needed from math
-
-class _SoundSourceData:
-    def __init__(self, mixer, data, loops):
-        self.mixer = mixer
-        self.data = data
-        self.pos = 0
-        self.loops = loops
-        self.done = False
-    def set_position(self, pos):
-        self.pos = pos % len(self.data)
-    def get_samples(self, sz):
-        z = self.data[self.pos:self.pos + sz]
-        self.pos += sz
-        if len(z) < sz:
-            # oops, sample data didn't cover buffer
-            if self.loops != 0:
-                # loop around
-                self.loops -= 1
-                self.pos = sz - len(z)
-                z = numpy.append(z, self.data[:sz - len(z)])
-            else:
-                # nothing to loop, just append zeroes
-                z = numpy.append(z, numpy.zeros(sz - len(z), numpy.int16))
-                # and stop the sample, it's done
-                self.done = True
-        if self.pos == len(self.data):
-            # this case loops without needing any appending
-            if self.loops != 0:
-                self.loops -= 1
-                self.pos = 0
-            else:
-                self.done = True
-        return z
-
-class _SoundSourceStream:
-    def __init__(self, mixer, fileobj, loops):
-        self.mixer = mixer
-        self.fileobj = fileobj
-        self.pos = 0
-        self.loops = loops
-        self.done = False
-        self.buf = ''
-    def set_position(self, pos):
-        self.pos = pos
-        self.fileobj.seek_time(pos * 1000 / self.mixer.samplerate / 2)
-    def get_samples(self, sz):
-        szb = sz * 2
-        while len(self.buf) < szb:
-            s = self.fileobj.read()
-            if s is None or s == '': break
-            self.buf += s[:]
-        z = numpy.fromstring(self.buf[:szb], dtype=numpy.int16)
-        if len(z) < sz:
-            # In this case we ran out of stream data
-            # append zeros (don't try to be sample accurate for streams)
-            z = numpy.append(z, numpy.zeros(sz - len(z), numpy.int16))
-            if self.loops != 0:
-                self.loops -= 1
-                self.pos = 0
-                self.fileobj.seek_time(0)
-                self.buf = ''
-            else:
-                self.done = True
-        else:
-            # remove head of buffer
-            self.buf = self.buf[szb:]
-        return z
 
 # A channel is a "sound event" that is playing
 class Channel:
@@ -123,16 +48,19 @@ class Channel:
         except ValueError:
             None
         self.mixer.lock.release()
+    
     def pause(self):
         """Pause the sound temporarily"""
         self.mixer.lock.acquire()
         self.active = False
         self.mixer.lock.release()
+    
     def unpause(self):
         """Unpause a previously paused sound"""
         self.mixer.lock.acquire()
         self.active = True
         self.mixer.lock.release()
+    
     def set_volume(self, v, fadetime=0):
         """Set the volume of the sound
 
@@ -147,28 +75,33 @@ class Channel:
             curv = calc_vol(self.src.pos, self.env)
             self.env = [[self.src.pos, curv], [self.src.pos + fadetime, v]]
         self.mixer.lock.release()
+    
     def get_volume(self):
         """Return current volume of sound"""
         self.mixer.lock.acquire()
         v = calc_vol(self.src.pos, self.env)
         self.mixer.lock.release()
         return v
+    
     def get_position(self):
         """Return current position of sound in samples"""
         self.mixer.lock.acquire()
         p = self.src.pos
         self.mixer.lock.release()
         return p
+    
     def set_position(self, p):
         """Set current position of sound in samples"""
         self.mixer.lock.acquire()
         self.src.set_position(p)
         self.mixer.lock.release()
+    
     def fadeout(self, time):
         """Schedule a fadeout of this sound in given time"""
         self.mixer.lock.acquire()
         self.set_volume(0.0, fadetime=time)
         self.mixer.lock.release()
+    
     def _get_samples(self, sz):
         if not self.active: return None
         v = calc_vol(self.src.pos, self.env)
@@ -232,35 +165,6 @@ def stereo_to_mono(left, right):
     """Return mono array from left and right sound stream arrays"""
     return (0.5 * left + 0.5 * right).astype(numpy.int16)
 
-
-def _create_stream(mixer, filename, checks):
-    if filename[-3:] in ['wav','WAV']:
-        wf = wave.open(filename, 'rb')
-        if checks:
-            assert(wf.getsampwidth() == 2)
-            assert(wf.getnchannels() == mixer.channels)
-            assert(wf.getframerate() == mixer.samplerate)
-        # create stream object
-        stream = Stream()
-        def str_read():
-            return wf.readframes(4096)
-        # give the stream object a read() method
-        stream.read = str_read
-        def str_seek_time(t):
-            if t == 0: wf.rewind()
-            assert(False) # unsupported for WAV streams
-        stream.seek_time = str_seek_time
-        return stream
-    # Here's how to do it for MP3
-    if filename[-3:] in ['mp3','MP3']:
-        mf = mad.MadFile(filename)
-        if checks:
-            assert(mixer.channels == 2) # MAD always returns stereo
-            assert(mf.samplerate() == mixer.samplerate)
-        stream = mf
-        return stream
-    assert(False) # filename must have wav or mp3 extension
-
 def calc_vol(t, env):
     """Calculate volume at time t given envelope env
 
@@ -293,181 +197,58 @@ def calc_vol(t, env):
     # volume is linear interpolation between points
     return env[n - 1][1] * (1.0 - f) + env[n][1] * f
 
+class _sound:
+    def __init__(self, mixer, src, duration = -1):
+        self.mixer = mixer
+        self.duration = duration
+        self.samples_remaining = duration * mixer.samplerate
+        self.done = False
+        self.pos = 0
+        play = [ "ffmpeg", '-re',
+            '-i', src,
+            '-f', 's16le',
+            '-ar', str(mixer.samplerate),
+            '-ac', str(mixer.channels),
+            'pipe:1']
+        self.stream = subprocess.Popen(play, stdout=subprocess.PIPE, bufsize=(10**8))
+
+    def set_duration(self, duration):
+        self.duration = duration
+        self.samples_remaining = duration * self.mixer.samplerate * self.mixer.channels
+
+    def get_samples(self, number_of_samples_requested):
+        samples = self.stream.stdout.read((number_of_samples_requested*2))
+        samples = numpy.fromstring(samples, dtype=numpy.int16)
+
+        self.pos += len(samples)
+
+        if len(samples) == 0:
+            self.done = True
+            samples = numpy.append(samples, numpy.zeros(number_of_samples_requested - len(samples), numpy.int16))
+            print("Stopped")
+        
+        return samples
+
+
 class Sound:
     """Represents a playable sound"""
-
-    def __init__(self, mixer, filename=None, data=None):
+    def __init__(self, mixer, filename, checks=True):
         """Create new sound from a WAV file, MP3 file, or explicit sample data"""
         self.mixer = mixer
         assert(mixer.init == True)
         # Three ways to construct Sound
         # First is by passing data directly
-        if data is not None:
-            self.data = data
-            return
         if filename is None:
             assert False
         # Second is through a file
-        self.data = None
-        # Load data from file into self.data
-        # Here's how to do it for WAV
-        # (Both of the loaders set nc to channels and fr to framerate
-        if filename[-3:] in ['wav','WAV']:
-            wf = wave.open(filename, 'rb')
-            #assert(wf.getsampwidth() == 2)
-            nc = wf.getnchannels()
-            self.framerate = wf.getframerate()
-            fr = wf.getframerate()
-            # read data
-            data = []
-            r = ' '
-            while r != '':
-                r = wf.readframes(4096)
-                data.append(r)
-            if wf.getsampwidth() == 2:
-                self.data = numpy.fromstring(''.join(data), 
-                                             dtype=numpy.int16)
-            if wf.getsampwidth() == 4: 
-                self.data = numpy.fromstring(''.join(data), 
-                                             dtype=numpy.int32)
-                self.data = self.data / 65536.0
-            if wf.getsampwidth() == 1:
-                self.data = numpy.fromstring(''.join(data), 
-                                             dtype=numpy.uint8)
-                self.data = self.data * 256.0
-            wf.close()
-        # Here's how to do it for MP3
-        if filename[-3:] in ['mp3','MP3']:
-            mf = mad.MadFile(filename)
-            # HACK ALERT
-            # Looks like MAD always gives us stereo
-            ##nc = mf.mode()
-            ##if nc == 0: nc = 1
-            nc = 2
-            self.framerate = mf.samplerate()
-            fr = mf.samplerate()
-            # read data
-            data = []
-            while True:
-                r = mf.read()
-                if r is None: break
-                data.append(r[:])
-            self.data = numpy.fromstring(''.join(data), dtype=numpy.int16)
-            del(mf)
-        if self.data is None:
-            assert False
-        # Resample if needed
-        if fr != self.mixer.samplerate:
-            scale = self.mixer.samplerate * 1.0 / fr
-            if nc == 1:
-                self.data = resample(self.data, scale)
-            if nc == 2:
-                # for stereo resample independently
-                left, right = uninterleave(self.data)
-                nleft = resample(left, scale)
-                nright = resample(right, scale)
-                self.data = interleave(nleft, nright)
-        # Stereo convert if necessary
-        if nc != mixer.channels:
-            # oops, stereo-ness differs
-            # convert to match init parameters
-            if nc == 1:
-                # came in mono, need stereo
-                self.data = interleave(self.data, self.data)
-            if nc == 2:
-                # came in stereo, need mono
-                # first make it a 2d array
-                left, right = uninterleave(self.data)
-                self.data = stereo_to_mono(left, right)
-        return
-
-    def get_length(self):
-        """Return the length of the sound in samples
-
-        To convert to seconds, divide by the samplerate and then divide
-        by 2 if in stereo.
-
-        """
-        return len(self.data)
-
-    def play(self, volume=1.0, offset=0, fadein=0, envelope=None, loops=0):
-        """Play the sound
-
-        Keyword arguments:
-        volume - volume to play sound at
-        offset - sample to start playback
-        fadein - number of samples to slowly fade in volume
-        envelope - a list of [offset, volume] pairs defining
-                   a linear volume envelope
-        loops - how many times to play the sound (-1 is infinite)
-
-        """
-        if envelope != None:
-            env = envelope
-        else:
-            if volume == 1.0 and fadein == 0:
-                env = []
-            else:
-                if fadein == 0:
-                    env = [[0, volume]]
-                else:
-                    env = [[offset, 0.0], [offset + fadein, volume]]
-        src = _SoundSourceData(self.mixer, self.data, loops)
-        src.pos = offset
-        sndevent = Channel(self.mixer, src, env)
-        return sndevent
-
-    def scale(self, vol):
-        """Scale a sound sample
-
-        vol is 0.0 to 1.0, amount to scale by
-        """
-        self.data = (self.data * vol).astype(numpy.int16)
-
-    def resample(self, scale):
-         """Resample a sound
-
-         scale = 1.0 means original sound
-         scale = 0.5 is half as long (up an octave)
-         scale = 2.0 is twice as long (down an octave)
-         
-         """
-         self.data = resample(self.data, scale)
-
-class StreamingSound:
-    """Represents a playable sound stream"""
-
-    def __init__(self, mixer, filename, checks=True):
-        """Create new streaming sound from a WAV file or an MP3 file
-
-        The new streaming sound must match the output samplerate
-        and stereo-ness.  You can turn off these checks by setting
-        the keyword checks=False, but the sound will be distorted.
-        
-        """
-        self.mixer = mixer        
-        assert(mixer.init == True)
-        if filename is None:
-            assert False
         self.filename = filename
-        self.checks = checks
+        self.src = _sound(mixer, self.filename)
+    
+    def live(self, volume=.25):
+        self.play(-1, volume)
 
-    def get_length(self):
-        """Return the length of the sound stream in samples
-
-        Only available for MP3 streams, not WAV ones.  To convert
-        result to seconds, divide by the samplerate and then divide by
-        2.
-
-        """
-        stream = _create_stream(mixer=self.mixer, filename=self.filename, checks=self.checks)
-        t = stream.total_time() * self.mixer.samplerate * 2 / 1000
-        del(stream)
-        return t
-
-    def play(self, volume=1.0, offset=0, fadein=0, envelope=None, loops=0):
-        """Play the sound stream
-
+    def play(self, duration=.5, volume=1.0, offset=0, fadein=0, envelope=None):
+        """Play the sound
         Keyword arguments:
         volume - volume to play sound at
         offset - sample to start playback
@@ -477,8 +258,6 @@ class StreamingSound:
         loops - how many times to play the sound (-1 is infinite)
 
         """
-        stream = _create_stream(mixer=self.mixer, filename=self.filename, checks=self.checks)
-
         if envelope != None:
             env = envelope
         else:
@@ -489,66 +268,15 @@ class StreamingSound:
                     env = [[0, volume]]
                 else:
                     env = [[offset, 0.0], [offset + fadein, volume]]
-        src = _SoundSourceStream(self.mixer, stream, loops)
-        src.pos = offset
-        sndevent = Channel(self.mixer, src, env)
+        self.src.set_duration(duration)
+        sndevent = Channel(self.mixer, self.src, env)
+        self.channel = sndevent
         return sndevent
 
-class Mixer:
-    def microphone_on(self):
-        """Turn on microphone
-    
-        Schedule audio input during main mixer tick.
-    
-        """
-        self.lock.acquire()
-        if self.micstream is not None:
-            self.micstream.close()
-        if self.stream is not None:
-            self.stream.close()
-        self.micstream = self.pyaudio.open(
-            format = pyaudio.paInt16,
-            channels = self.channels,
-            rate = self.samplerate,
-            input_device_index = self.input_device_index,
-            input = True)
-        self.stream = self.pyaudio.open(
-            format = pyaudio.paInt16,
-            channels = self.channels,
-            rate = self.samplerate,
-            output_device_index = self.output_device_index,
-            output = True)
-        self.mic= True
-        self.lock.release()
-    
-    def microphone_off(self):
-        """Turn off microphone"""
-        self.lock.acquire()
-        if self.micstream is not None:
-            self.micstream.close()
-        if self.stream is not None:
-            self.stream.close()
-        self.stream = self.pyaudio.open(
-            format = pyaudio.paInt16,
-            channels = self.channels,
-            rate = self.samplerate,
-            output_device_index = self.output_device_index,
-            output = True)
-        self.mic= False
-        self.lock.release()
-    
-    def get_microphone(self):
-        """Return raw data from microphone as Numpy array
-    
-        Default format will be 16-bit signed mono.  Format will match
-        audio playback.  You must call tick() every frame to update the
-        results from this function.
-    
-        """
-        self.lock.acquire()
-        self.lock.release()
-        return numpy.fromstring(self.micdata, dtype=numpy.int16)
-        
+    def stop(self):
+        self.channel.stop()
+
+class Mixer:       
     def tick(self, extra=None):
         """Main loop of mixer, mix and do audio IO
     
@@ -577,15 +305,13 @@ class Mixer:
         buffer = buffer.clip(-32767.0, 32767.0)
         for e in rmlist:
             self.srcs.remove(e)
-        if self.mic:
-            self.micdata = self.micstream.read(buffsize)
         self.lock.release()
-        odata = (buffer.astype(numpy.int16)).tostring()
+        self.odata = (buffer.astype(numpy.int16)).tostring()
         # yield rather than block, pyaudio doesn't release GIL
         while self.stream.get_write_available() < self.chunksize: time.sleep(0.001)
-        self.stream.write(odata, self.chunksize)
+        self.stream.write(self.odata, self.chunksize)
     
-    def __init__(self, samplerate=44100, chunksize=1024, stereo=True, microphone=False, input_device_index=None, output_device_index=None):
+    def __init__(self, samplerate=44100, chunksize=1024, stereo=True, input_device_index=None, output_device_index=None):
         """Initialize mixer
     
         Must be called before any sounds can be played or loaded.
@@ -603,6 +329,7 @@ class Mixer:
         assert (8000 <= samplerate <= 48000)
         self.samplerate = samplerate
         self.chunksize = chunksize        
+        self.odata = []
         assert (stereo in [True, False])
         self.stereo = stereo
         if stereo:
@@ -611,33 +338,26 @@ class Mixer:
             self.channels = 1
         self.samplewidth = 2
         self.srcs = []
-        self.mic = microphone
-        self.lock = thread.allocate_lock()
+        self.lock = threading.Lock()
         self.pyaudio = pyaudio.PyAudio()
         # It's important to open Input, then Output (not sure why)
         # Other direction gives very annoying sound errors (1/2 rate?)
         self.input_device_index = input_device_index
         self.output_device_index = output_device_index
-        if microphone:
-            self.micstream = self.pyaudio.open(
-                format = pyaudio.paInt16,
-                channels = self.channels,
-                rate = self.samplerate,
-                input_device_index = input_device_index,
-                input = True)
-            self.mic= True
         self.stream = self.pyaudio.open(
             format = pyaudio.paInt16,
             channels = self.channels,
             rate = self.samplerate,
             output_device_index = output_device_index,
-            output = True)
+            output = True,
+            input = True)
         self.init = True
     
     def start(self):
         """Start separate mixing thread"""
         #def f(self):
-        self.thread = thread.start_new_thread(self.newthread, ())
+        self.thread = threading.Thread(target=self.newthread)
+        self.thread.start()
 
     def newthread(self):
         while True:
@@ -650,10 +370,9 @@ class Mixer:
         self.init = False
         if self.stream is not None:
             self.stream.close()
-        if self.micstream is not None:
-            self.micstream.close()
         self.pyaudio.terminate()
         self.lock.release()
+        print("Quitting")
     
     def set_chunksize(self, size=1024):
         """Set the audio chunk size for each frame of audio output
@@ -664,51 +383,6 @@ class Mixer:
         self.lock.acquire()
         self.chunksize = size
         self.lock.release()
-
-class DynamicGenerator:
-    """Represents a playable sound stream. Override this class to provide dynamic
-    or generated audio streams."""
-    
-    def __init__(self, mixer, checks=True):
-        """Create new streaming sound from a WAV file or an MP3 file
-
-        The new streaming sound must match the output samplerate()
-        and stereo-ness.  You can turn off these checks by setting()
-        the keyword checks=False, but the sound will be distorted.()
-        ()
-        """
-        assert(mixer.init == True)
-        self.mixer = mixer
-        self.checks = checks
-        self.src = []
-
-    def get_length(self):
-        return 0
-    
-    def play(self, duration=.5, volume=.25, offset=0, fadein=0, envelope=None):
-        """Play the sound stream
-
-        Keyword arguments:
-        volume - volume to play sound at
-        offset - sample to start playback
-        fadein - number of samples to slowly fade in volume
-        envelope - a list of [offset, volume] pairs defining
-                   a linear volume envelope
-        loops - how many times to play the sound (-1 is infinite)
-
-        """
-        if envelope != None:
-            env = envelope
-        else:
-            if volume == 1.0 and fadein == 0:
-                env = []
-            else:
-                if fadein == 0:
-                    env = [[0, volume]]
-                else:
-                    env = [[offset, 0.0], [offset + fadein, volume]]
-        sndevent = Channel(self.mixer, self.src, env)
-        return sndevent
     
 class _MicInput:
     def __init__(self, mixer, device_id, duration = -1):
@@ -739,20 +413,18 @@ class _MicInput:
         self.pos += len(samples)
 
         self.samples_remaining -= number_of_samples_requested    
-        
+
         if len(samples) < number_of_samples_requested:
             self.done = True
             self.stream.close()
             # In this case we ran out of stream data
             # append zeros (don't try to be sample accurate for streams)
             samples = numpy.append(samples, numpy.zeros(number_of_samples_requested - len(samples), numpy.int16))
-
         return samples
 
-class MicInput(DynamicGenerator):
+class MicInput():
     def __init__(self, mixer, pyaudio_input_device_id, checks=True):
-        DynamicGenerator.__init__(self, mixer, checks)
-        #self.device_id = pyaudio_input_device_id
+        self.mixer = mixer
         self.src = _MicInput(mixer, pyaudio_input_device_id)
 
     def live(self, volume=.25):
@@ -791,15 +463,27 @@ class MicInput(DynamicGenerator):
 
 #To get device index please run audiodevicename.py
 
-if __name__ == "__main__":
+def stream1():
     mix = Mixer(stereo=True, output_device_index=17)
-    mix.start()
-    mic = MicInput(mix, 3)
-    mic.live(1)
+    song = Sound(mix, "Mr Z Story.mp3")
+    song.live(1)
     while True:
-        test = input("Yes or no: ")
-        if test == "no":
-            break
-        else:
-            pass
-    mic.stop()
+        mix.tick()
+        time.sleep(1/int(mix.samplerate))
+
+
+
+if __name__ == "__main__":
+    t1 = threading.Thread(target=stream1)
+    t1.start()
+    #mic = MicInput(mix, 3)
+    #mic.live(1)
+    #while True:
+    #    test = input("Yes or no: ")
+    #    if test == "no":
+    #        break
+    #    else:
+    #        pass
+    #mic.stop()
+    t1.join()
+
