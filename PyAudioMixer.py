@@ -680,11 +680,12 @@ class DynamicGenerator:
         assert(mixer.init == True)
         self.mixer = mixer
         self.checks = checks
+        self.src = []
 
     def get_length(self):
         return 0
     
-    def play(self, duration=.5, volume=.25, fadein=0, envelope=None):
+    def play(self, duration=.5, volume=.25, offset=0, fadein=0, envelope=None):
         """Play the sound stream
 
         Keyword arguments:
@@ -706,7 +707,7 @@ class DynamicGenerator:
                     env = [[0, volume]]
                 else:
                     env = [[offset, 0.0], [offset + fadein, volume]]
-        sndevent = Channel(self.mixer, src, env)
+        sndevent = Channel(self.mixer, self.src, env)
         return sndevent
     
 class _MicInput:
@@ -757,7 +758,7 @@ class MicInput(DynamicGenerator):
     def live(self, volume=.25):
         self.play(-1, volume)
 
-    def play(self, duration=.5, volume=.25, fadein=0, envelope=None):
+    def play(self, duration=.5, volume=.25, offset=0, fadein=0, envelope=None):
         """Play the sound stream
 
         Keyword arguments:
