@@ -241,7 +241,7 @@ def _create_stream(mixer, filename, checks):
             assert(wf.getnchannels() == mixer.channels)
             assert(wf.getframerate() == mixer.samplerate)
         # create stream object
-        stream = _Stream()
+        stream = Stream()
         def str_read():
             return wf.readframes(4096)
         # give the stream object a read() method
@@ -460,7 +460,7 @@ class StreamingSound:
         2.
 
         """
-        stream = _create_stream(self.filename, self.checks)
+        stream = _create_stream(mixer=self.mixer, filename=self.filename, checks=self.checks)
         t = stream.total_time() * self.mixer.samplerate * 2 / 1000
         del(stream)
         return t
@@ -477,7 +477,7 @@ class StreamingSound:
         loops - how many times to play the sound (-1 is infinite)
 
         """
-        stream = _create_stream(self.filename, self.checks)
+        stream = _create_stream(mixer=self.mixer, filename=self.filename, checks=self.checks)
 
         if envelope != None:
             env = envelope
@@ -637,9 +637,9 @@ class Mixer:
     def start(self):
         """Start separate mixing thread"""
         #def f(self):
-        self.thread = thread.start_new_thread(self.thread, ())
+        self.thread = thread.start_new_thread(self.newthread, ())
 
-    def thread(self):
+    def newthread(self):
         while True:
             self.tick()
             time.sleep(0.001)
@@ -684,7 +684,7 @@ class DynamicGenerator:
     def get_length(self):
         return 0
     
-    def play(self, frequency, duration=.5, volume=.25, fadein=0, envelope=None):
+    def play(self, duration=.5, volume=.25, fadein=0, envelope=None):
         """Play the sound stream
 
         Keyword arguments:
@@ -706,8 +706,6 @@ class DynamicGenerator:
                     env = [[0, volume]]
                 else:
                     env = [[offset, 0.0], [offset + fadein, volume]]
-
-        src = self.generator_class(self.mixer, frequency, duration)
         sndevent = Channel(self.mixer, src, env)
         return sndevent
     
@@ -791,14 +789,6 @@ class MicInput(DynamicGenerator):
         self.channel.stop()
 
 if __name__ == "__main__":
-    import sys
-    def log_uncaught_exceptions(ex_cls, ex, tb):
-
-        print (''.join(traceback.format_tb(tb)))
-        print ('{0}: {1}'.format(ex_cls, ex))
-
-    sys.excepthook = log_uncaught_exceptions
-
     mix2 = Mixer(stereo=True, output_device_index=17)
     mix2.start()
 
