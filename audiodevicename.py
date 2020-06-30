@@ -4,7 +4,7 @@ test = pyaudio.PyAudio()
 
 audioindevice = {}
 audiooutdevice = {}
-'''
+
 for i in range(test.get_device_count()):
     if (test.get_device_info_by_index(i)['maxInputChannels'] > 0):
         audioindevice[i] = test.get_device_info_by_index(i)['name']
@@ -24,3 +24,4 @@ print("Audio output devices: " + str(audiooutdevice) + "\n")
 for i in range(test.get_device_count()):
     print(test.get_device_info_by_index(i)['name'])
     print("\n")
+'''
