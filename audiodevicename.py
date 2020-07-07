@@ -20,8 +20,3 @@ for i in range(test.get_device_count()):
 
 print("Audio input devicess: " + str(audioindevice) + "\n")
 print("Audio output devices: " + str(audiooutdevice) + "\n")
-'''
-for i in range(test.get_device_count()):
-    print(test.get_device_info_by_index(i)['name'])
-    print("\n")
-'''

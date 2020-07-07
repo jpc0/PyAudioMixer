@@ -25,11 +25,6 @@ import pyaudio
 import websockets
 import asyncio
 
-PI = 3.141592653589793 # Only thing we needed from math
-
-# A channel is a "sound event" that is playing
-
-
 def resample(smp, scale=1.0):
     """Resample a sound to be a different length
 
@@ -142,15 +137,14 @@ class Sound:
         self.samples_remaining = duration * self.mixer.samplerate * self.mixer.channels
 
     def get_samples(self, number_of_samples_requested):
-        samples = self.stream.stdout.read((number_of_samples_requested*2))
-        samples = numpy.fromstring(samples, dtype=numpy.int16)
+        samples = self.stream.stdout.read((number_of_samples_requested * self.mixer.channels))
+        samples = numpy.frombuffer(samples, dtype=numpy.int16)
 
         self.pos += len(samples)
 
         if len(samples) < number_of_samples_requested:
             self.done = True
             samples = numpy.append(samples, numpy.zeros(number_of_samples_requested - len(samples), numpy.int16))
-            print("Stopped")
             self.stream.stdout.close()
         
         return samples
@@ -211,9 +205,10 @@ class MicInput:
         if not self.samples_remaining < 0 and number_of_samples_requested > self.samples_remaining:
             number_of_samples = self.samples_remaining
 
-        samples = self.stream.read(int((number_of_samples) / self.mixer.channels))
-        samples = numpy.fromstring(samples, dtype=numpy.int16)
+        samples = self.stream.read(int((number_of_samples) / self.mixer.channels), exception_on_overflow=False)
+        samples = numpy.frombuffer(samples, dtype=numpy.int16)
         self.pos += len(samples)
+        print(samples)
 
         self.samples_remaining -= number_of_samples_requested    
 
@@ -226,11 +221,10 @@ class MicInput:
         return samples
     
     def live(self, volume=.5):
-        self.play(-1, volume)
+        self.unmute(-1, volume)
 
-    def play(self, duration=.5, volume=.25, offset=0, fadein=0, envelope=None):
+    def unmute(self, duration=.5, volume=.25, offset=0, fadein=0, envelope=None):
         """Play the sound stream
-
         Keyword arguments:
         volume - volume to play sound at
         offset - sample to start playback
@@ -238,7 +232,6 @@ class MicInput:
         envelope - a list of [offset, volume] pairs defining
                    a linear volume envelope
         loops - how many times to play the sound (-1 is infinite)
-
         """
         if envelope != None:
             env = envelope
@@ -256,7 +249,7 @@ class MicInput:
         self.channel = sndevent
         return sndevent
 
-    def stop(self):
+    def mute(self):
         self.channel.stop()
 
 class Channel:
@@ -273,8 +266,10 @@ class Channel:
     
     def _get_samples(self, sz):
         if not self.active: return None
+
         v = calc_vol(self.src.pos, self.env)
         z = self.src.get_samples(sz)
+
         if self.src.done: self.done = True
         return z * v
 
@@ -342,7 +337,7 @@ class Channel:
         self.mixer.lock.release()
 
 class Mixer:       
-    def __init__(self, samplerate=44100, chunksize=1024, stereo=True):
+    def __init__(self, samplerate=48000, chunksize=1024, stereo=True):
         """Initialize mixer
     
         Must be called before any sounds can be played or loaded.
@@ -388,28 +383,26 @@ class Mixer:
 
         srcrmlist = [] #Sources to be removed
         
-        #if not self.init:   #Check if mixer has been initialized, will be removing this
-        #    return
-        
         #Create buffer
         buffsize = self.chunksize * self.channels
-        buffer = numpy.zeros(buffsize, numpy.float)
+        buss = numpy.zeros(buffsize, numpy.float)
     
         if self.lock is None: return # this can happen if main thread quit first
+        
         self.lock.acquire()
         for sndevt in self.srcs:
             s = sndevt._get_samples(buffsize)
             if s is not None:
-                buffer += s
+                buss += s
             if sndevt.done:
                 srcrmlist.append(sndevt)
         if extra is not None:
-            buffer += extra
-        buffer = buffer.clip(-32767.0, 32767.0)
-        self.buffer = buffer
+            buss += extra
+        buss = buss.clip(-32767.0, 32767.0)
+        self.buss = buss
         for e in srcrmlist:
             self.srcs.remove(e)
-        self.odata = (buffer.astype(numpy.int16)).tostring()
+        self.odata = (buss.astype(numpy.int16)).tobytes()
         for output in self.dests:
             output.play_to(self.odata)
         self.lock.release()
@@ -467,10 +460,10 @@ class Output:
             self.mixer.tick()
             # yield rather than block, pyaudio doesn't release GIL
             if self.stream.get_write_available() < self.mixer.chunksize: 
-                continue
+                pass
             else:
                 self.stream.write(self.data, self.mixer.chunksize)
-                time.sleep((1/(self.mixer.samplerate*self.mixer.chunksize))*self.mixer.channels)
+            time.sleep((1/(self.mixer.samplerate))*self.mixer.channels)
 
 class Clock:
     def __init__(self, mixers):
@@ -480,15 +473,15 @@ class Clock:
         while True:
             for mixer in self.mixers:
                 mixer.tick()
-                time.sleep((len(self.mixers))/mixer.samplerate)
+                time.sleep((len(self.mixers)*mixer.chunksize)/(mixer.samplerate))
 
 def stream1():
     mix = Mixer()
-    song = Sound(mix, "Mr Z Story.mp3")
+    song = Sound(mix, "test/test1.wav")
     song.live(1)
     mic = MicInput(mix)
     mic.live(1)
-    speakers = Output(mix, output_device_index=17)
+    speakers = Output(mix)
     speakers.start()
     clock = Clock([mix])
     clock.run()
