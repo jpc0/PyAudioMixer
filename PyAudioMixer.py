@@ -25,6 +25,7 @@ import pyaudio
 import websockets
 import asyncio
 
+
 def resample(smp, scale=1.0):
     """Resample a sound to be a different length
 
@@ -47,10 +48,11 @@ def resample(smp, scale=1.0):
     # exact ratios (i.e. for 44100 to 22050 or vice versa)
     # using endpoint=False gets less noise in the resampled sound
     return numpy.interp(
-        numpy.linspace(0.0, 1.0, n, endpoint=False), # where to interpret
-        numpy.linspace(0.0, 1.0, len(smp), endpoint=False), # known positions
-        smp, # known data points
-        )
+        numpy.linspace(0.0, 1.0, n, endpoint=False),  # where to interpret
+        numpy.linspace(0.0, 1.0, len(smp), endpoint=False),  # known positions
+        smp,  # known data points
+    )
+
 
 def interleave(left, right):
     """Given two separate arrays, return a new interleaved array
@@ -63,6 +65,7 @@ def interleave(left, right):
 
     """
     return numpy.ravel(numpy.vstack((left, right)), order='F')
+
 
 def uninterleave(data):
     """Given a stereo array, return separate left and right streams
@@ -77,9 +80,11 @@ def uninterleave(data):
     """
     return data.reshape(2, len(data)/2, order='FORTRAN')
 
+
 def stereo_to_mono(left, right):
     """Return mono array from left and right sound stream arrays"""
     return (0.5 * left + 0.5 * right).astype(numpy.int16)
+
 
 def calc_vol(t, env):
     """Calculate volume at time t given envelope env
@@ -89,8 +94,9 @@ def calc_vol(t, env):
     envelope should be sorted by time
 
     """
-    #Find location of last envelope point before t
-    if len(env) == 0: return 1.0
+    # Find location of last envelope point before t
+    if len(env) == 0:
+        return 1.0
     if len(env) == 1:
         return env[0][1]
     n = 0
@@ -104,7 +110,7 @@ def calc_vol(t, env):
         # in this case, all points are before, envelope is over
         # use last volume
         return env[-1][1]
-        
+
     # now n holds point that is later than t
     # n - 1 is point before t
     f = float(t - env[n - 1][0]) / (env[n][0] - env[n - 1][0])
@@ -115,7 +121,7 @@ def calc_vol(t, env):
 
 
 class Sound:
-    def __init__(self, mixer, filename, duration = -1, loop=0):
+    def __init__(self, mixer, filename, duration=-1, loop=0):
         self.mixer = mixer
         self.duration = duration
         self.samples_remaining = duration * mixer.samplerate
@@ -124,32 +130,35 @@ class Sound:
         if filename is None:
             assert False
         self.filename = filename
-        play = [ "ffmpeg", '-re',
-            '-stream_loop', str(loop),
-            '-i', filename,
-            '-f', 's16le',
-            '-ar', str(mixer.samplerate),
-            '-ac', str(mixer.channels),
-            'pipe:1']
-        self.stream = subprocess.Popen(play, stdout=subprocess.PIPE, bufsize=(10**8))
+        play = ["ffmpeg", '-re',
+                '-stream_loop', str(loop),
+                '-i', filename,
+                '-f', 's16le',
+                '-ar', str(mixer.samplerate),
+                '-ac', str(mixer.channels),
+                'pipe:1']
+        self.stream = subprocess.Popen(
+            play, stdout=subprocess.PIPE, bufsize=(10**8))
 
     def set_duration(self, duration):
         self.duration = duration
         self.samples_remaining = duration * self.mixer.samplerate * self.mixer.channels
 
     def get_samples(self, number_of_samples_requested):
-        samples = self.stream.stdout.read((number_of_samples_requested * self.mixer.channels))
+        samples = self.stream.stdout.read(
+            (number_of_samples_requested * self.mixer.channels))
         samples = numpy.frombuffer(samples, dtype=numpy.int16)
 
         self.pos += len(samples)
 
         if len(samples) < number_of_samples_requested:
             self.done = True
-            samples = numpy.append(samples, numpy.zeros(number_of_samples_requested - len(samples), numpy.int16))
+            samples = numpy.append(samples, numpy.zeros(
+                number_of_samples_requested - len(samples), numpy.int16))
             self.stream.stdout.close()
-        
+
         return samples
-    
+
     def live(self, volume=.25):
         self.play(-1, volume)
 
@@ -182,19 +191,20 @@ class Sound:
     def stop(self):
         self.channel.stop()
 
+
 class MicInput:
-    def __init__(self, mixer, device_id = -1, duration = -1):
+    def __init__(self, mixer, device_id=-1, duration=-1):
         self.mixer = mixer
         self.duration = duration
         self.samples_remaining = duration * mixer.samplerate
         self.done = False
         self.pos = 0
         self.pyaudio = pa = pyaudio.PyAudio()
-        self.stream = pa.open(format = pyaudio.paInt16,
-            channels = mixer.channels,
-            rate = mixer.samplerate,
-            input_device_index = device_id,
-            input = True)
+        self.stream = pa.open(format=pyaudio.paInt16,
+                              channels=mixer.channels,
+                              rate=mixer.samplerate,
+                              input_device_index=device_id,
+                              input=True)
 
     def set_duration(self, duration):
         self.duration = duration
@@ -206,21 +216,23 @@ class MicInput:
         if not self.samples_remaining < 0 and number_of_samples_requested > self.samples_remaining:
             number_of_samples = self.samples_remaining
 
-        samples = self.stream.read(int((number_of_samples) / self.mixer.channels), exception_on_overflow=False)
+        samples = self.stream.read(
+            int((number_of_samples) / self.mixer.channels), exception_on_overflow=False)
         samples = numpy.frombuffer(samples, dtype=numpy.int16)
-        
+
         self.pos += len(samples)
 
-        self.samples_remaining -= number_of_samples_requested    
+        self.samples_remaining -= number_of_samples_requested
 
         if len(samples) < number_of_samples_requested:
             self.done = True
             self.stream.close()
             # In this case we ran out of stream data
             # append zeros (don't try to be sample accurate for streams)
-            samples = numpy.append(samples, numpy.zeros(number_of_samples_requested - len(samples), numpy.int16))
+            samples = numpy.append(samples, numpy.zeros(
+                number_of_samples_requested - len(samples), numpy.int16))
         return samples
-    
+
     def live(self, volume=.5):
         self.unmute(-1, volume)
 
@@ -253,8 +265,10 @@ class MicInput:
     def mute(self):
         self.channel.stop()
 
+
 class Channel:
     """Represents one sound source currently playing"""
+
     def __init__(self, mixer, src, env):
         self.mixer = mixer
         self.src = src
@@ -264,14 +278,16 @@ class Channel:
         mixer.lock.acquire()
         mixer.srcs.append(self)
         mixer.lock.release()
-    
+
     def _get_samples(self, sz):
-        if not self.active: return None
+        if not self.active:
+            return None
 
         v = calc_vol(self.src.pos, self.env)
         z = self.src.get_samples(sz)
 
-        if self.src.done: self.done = True
+        if self.src.done:
+            self.done = True
         return z * v
 
     def stop(self):
@@ -283,19 +299,19 @@ class Channel:
         except ValueError:
             None
         self.mixer.lock.release()
-    
+
     def pause(self):
         """Pause the sound temporarily"""
         self.mixer.lock.acquire()
         self.active = False
         self.mixer.lock.release()
-    
+
     def unpause(self):
         """Unpause a previously paused sound"""
         self.mixer.lock.acquire()
         self.active = True
         self.mixer.lock.release()
-    
+
     def set_volume(self, v, fadetime=0):
         """Set the volume of the sound
 
@@ -310,39 +326,40 @@ class Channel:
             curv = calc_vol(self.src.pos, self.env)
             self.env = [[self.src.pos, curv], [self.src.pos + fadetime, v]]
         self.mixer.lock.release()
-    
+
     def get_volume(self):
         """Return current volume of sound"""
         self.mixer.lock.acquire()
         v = calc_vol(self.src.pos, self.env)
         self.mixer.lock.release()
         return v
-    
+
     def get_position(self):
         """Return current position of sound in samples"""
         self.mixer.lock.acquire()
         p = self.src.pos
         self.mixer.lock.release()
         return p
-    
+
     def set_position(self, p):
         """Set current position of sound in samples"""
         self.mixer.lock.acquire()
         self.src.set_position(p)
         self.mixer.lock.release()
-    
+
     def fadeout(self, time):
         """Schedule a fadeout of this sound in given time"""
         self.mixer.lock.acquire()
         self.set_volume(0.0, fadetime=time)
         self.mixer.lock.release()
 
-class Mixer:       
+
+class Mixer:
     def __init__(self, clock, samplerate=48000, chunksize=2**10, stereo=True):
         """Initialize mixer
-    
+
         Must be called before any sounds can be played or loaded.
-    
+
         Keyword arguments:
         samplerate - samplerate to use for playback (default 22050)
         chunksize - size of playback chunks
@@ -351,13 +368,13 @@ class Mixer:
           Can be any size, does not need to be a power of two. (default 1024)
         stereo - whether to play back in stereo
         """
-        #Checks
+        # Checks
         assert (8000 <= samplerate <= 48000)
         assert (stereo in [True, False])
-        
-        #Mixer settings
+
+        # Mixer settings
         self.samplerate = samplerate
-        self.chunksize = chunksize        
+        self.chunksize = chunksize
         self.stereo = stereo
         if stereo:
             self.channels = 2
@@ -365,33 +382,34 @@ class Mixer:
             self.channels = 1
         self.samplewidth = 2
         clock.add_mixer(self)
-        
-        #Variables
+
+        # Variables
         self.srcs = []
         self.dests = []
         self.lock = threading.Lock()
 
     def tick(self, extra=None):
         """Main loop of mixer, mix and do audio IO
-    
+
         Audio sources are mixed by addition and then clipped.  Too many
         loud sources will cause distortion.
-    
+
         extra is for extra sound data to mix into output
           must be in numpy array of correct length
-          
+
         """
 
-        #Variables
+        # Variables
 
-        srcrmlist = [] #Sources to be removed
-        
-        #Create buffer
+        srcrmlist = []  # Sources to be removed
+
+        # Create buffer
         buffsize = self.chunksize * self.channels
         buss = numpy.zeros(buffsize, numpy.float)
-    
-        if self.lock is None: return # this can happen if main thread quit first
-        
+
+        if self.lock is None:
+            return  # this can happen if main thread quit first
+
         self.lock.acquire()
         for sndevt in self.srcs:
             s = sndevt._get_samples(buffsize)
@@ -409,16 +427,16 @@ class Mixer:
         for output in self.dests:
             output.play_to(self.odata)
         self.lock.release()
-    
+
     def quit(self):
         """Stop all playback and terminate mixer"""
         self.lock.acquire()
         self.init = False
         self.lock.release()
-    
+
     def set_chunksize(self, size=1024):
         """Set the audio chunk size for each frame of audio output
-    
+
         This function is useful for setting the framerate when audio output
         is synchronized with video.
         """
@@ -426,21 +444,23 @@ class Mixer:
         self.chunksize = size
         self.lock.release()
 
+
 class Output:
     '''Basic output class for speakers, can be overwritten for other output types, IE ffmpeg'''
-    def __init__(self, mixer, output_device_index=-1, checks = True):     
-        #Variables
+
+    def __init__(self, mixer, output_device_index=-1, checks=True):
+        # Variables
         self.mixer = mixer
         self.output_device_index = output_device_index
-        
+
         self.pyaudio = pyaudio.PyAudio()
         self.stream = self.pyaudio.open(
-            format = pyaudio.paInt16,
-            channels = self.mixer.channels,
-            rate = self.mixer.samplerate,
-            output_device_index = self.output_device_index,
-            output = True)
-    
+            format=pyaudio.paInt16,
+            channels=self.mixer.channels,
+            rate=self.mixer.samplerate,
+            output_device_index=self.output_device_index,
+            output=True)
+
     def start(self):
         self.mixer.lock.acquire()
         self.mixer.dests.append(self)
@@ -459,38 +479,36 @@ class Output:
         self.data = data
         self.stream.write(data, self.mixer.chunksize)
 
+
 class Clock:
     def __init__(self):
-        self.mixers = []
+        self.devices = []
         clock1 = threading.Thread(target=self.run)
         clock1.start()
-        
+
     def add_mixer(self, mixers):
-        self.mixers.append(mixers)
-    
+        self.devices.append(mixers)
+
     def run(self):
         while True:
-            for mixer in self.mixers:
+            for mixer in self.devices:
                 mixer.tick()
-                if len(self.mixers) > 0:
-                    time.sleep((len(self.mixers)*mixer.chunksize)/(mixer.samplerate)/2)
-                else:
-                    time.sleep(0.001)
+            time.sleep(1/48000)
+
 
 def stream1():
-    clock = Clock()
-
     mix = Mixer(clock)
-    song = Sound(mix, "test/test1.wav",loop=5)
+    song = Sound(mix, "test/test1.wav", loop=5)
     song.live(1)
     mic = MicInput(mix)
     mic.live(1)
     speakers = Output(mix)
     speakers.start()
 
-#To get device index please run audiodevicename.py
+# To get device index please run audiodevicename.py
+
 
 if __name__ == "__main__":
+    clock = Clock()
     t1 = threading.Thread(target=stream1)
     t1.start()
-
