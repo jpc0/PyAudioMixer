@@ -1,8 +1,8 @@
 """Advanced Realtime Software Mixer
 
 This module implements an advanced realtime sound mixer suitable for
-use in games or other audio applications.  It supports loading sounds
-in uncompressed WAV format.  It can mix several sounds together during
+use in games or other audio applications.  It supports loading any sounds
+that FFMPEG can play.  It can mix several sounds together during
 playback.  The volume and position of each sound can be finely
 controlled.  The mixer can use a separate thread so clients never block
 during operations.  Samples can also be looped any number of times.
@@ -83,6 +83,7 @@ def stereo_to_mono(left, right):
     """Return mono array from left and right sound stream arrays"""
     return (0.5 * left + 0.5 * right).astype(numpy.int16)
 
+
 class Sound:
     def __init__(self, mixer, filename, duration=-1, loop=0):
         self.mixer = mixer
@@ -143,7 +144,6 @@ class MicInput:
                               input_device_index=device_id,
                               input=True)
 
-
     def get_samples(self, number_of_samples_requested):
         samples = self.stream.read(
             int((number_of_samples_requested) / self.mixer.channels), exception_on_overflow=False)
@@ -168,6 +168,7 @@ class MicInput:
         self.mixer.lock.acquire()
         self.mixer.srcs.remove(self)
         self.mixer.lock.release()
+
 
 class Mixer:
     def __init__(self, clock, samplerate=48000, chunksize=2**10, stereo=True):
@@ -209,8 +210,9 @@ class Mixer:
         Audio sources are mixed by addition and then clipped.  Too many
         loud sources will cause distortion.
 
-        extra is for extra sound data to mix into output
-          must be in numpy array of correct length
+        Extra is for extra sound data to mix into output
+          
+        Must be in numpy array of correct length
 
         """
 
