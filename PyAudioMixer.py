@@ -115,7 +115,7 @@ def calc_vol(t, env):
 
 
 class Sound:
-    def __init__(self, mixer, filename, duration = -1):
+    def __init__(self, mixer, filename, duration = -1, loop=0):
         self.mixer = mixer
         self.duration = duration
         self.samples_remaining = duration * mixer.samplerate
@@ -125,6 +125,7 @@ class Sound:
             assert False
         self.filename = filename
         play = [ "ffmpeg", '-re',
+            '-stream_loop', str(loop),
             '-i', filename,
             '-f', 's16le',
             '-ar', str(mixer.samplerate),
@@ -207,8 +208,8 @@ class MicInput:
 
         samples = self.stream.read(int((number_of_samples) / self.mixer.channels), exception_on_overflow=False)
         samples = numpy.frombuffer(samples, dtype=numpy.int16)
+        
         self.pos += len(samples)
-        print(samples)
 
         self.samples_remaining -= number_of_samples_requested    
 
@@ -337,7 +338,7 @@ class Channel:
         self.mixer.lock.release()
 
 class Mixer:       
-    def __init__(self, samplerate=48000, chunksize=1024, stereo=True):
+    def __init__(self, clock, samplerate=48000, chunksize=2**10, stereo=True):
         """Initialize mixer
     
         Must be called before any sounds can be played or loaded.
@@ -353,6 +354,7 @@ class Mixer:
         #Checks
         assert (8000 <= samplerate <= 48000)
         assert (stereo in [True, False])
+        
         #Mixer settings
         self.samplerate = samplerate
         self.chunksize = chunksize        
@@ -362,8 +364,9 @@ class Mixer:
         else:
             self.channels = 1
         self.samplewidth = 2
+        clock.add_mixer(self)
+        
         #Variables
-        self.odata = b''
         self.srcs = []
         self.dests = []
         self.lock = threading.Lock()
@@ -412,7 +415,6 @@ class Mixer:
         self.lock.acquire()
         self.init = False
         self.lock.release()
-        print("Quitting")
     
     def set_chunksize(self, size=1024):
         """Set the audio chunk size for each frame of audio output
@@ -430,6 +432,7 @@ class Output:
         #Variables
         self.mixer = mixer
         self.output_device_index = output_device_index
+        
         self.pyaudio = pyaudio.PyAudio()
         self.stream = self.pyaudio.open(
             format = pyaudio.paInt16,
@@ -445,46 +448,45 @@ class Output:
 
     def stop(self):
         self.mixer.lock.acquire()
+
         self.mixer.dests.remove(self)
         self.stream.start_stream()
         self.pyaudio.terminate()
+
         self.mixer.lock.release()
 
     def play_to(self, data):
         self.data = data
         self.stream.write(data, self.mixer.chunksize)
 
-    def run(self):
-        '''Temporary'''
-        while True:
-            self.mixer.tick()
-            # yield rather than block, pyaudio doesn't release GIL
-            if self.stream.get_write_available() < self.mixer.chunksize: 
-                pass
-            else:
-                self.stream.write(self.data, self.mixer.chunksize)
-            time.sleep((1/(self.mixer.samplerate))*self.mixer.channels)
-
 class Clock:
-    def __init__(self, mixers):
-        self.mixers = mixers
+    def __init__(self):
+        self.mixers = []
+        clock1 = threading.Thread(target=self.run)
+        clock1.start()
+        
+    def add_mixer(self, mixers):
+        self.mixers.append(mixers)
     
     def run(self):
         while True:
             for mixer in self.mixers:
                 mixer.tick()
-                time.sleep((len(self.mixers)*mixer.chunksize)/(mixer.samplerate))
+                if len(self.mixers) > 0:
+                    time.sleep((len(self.mixers)*mixer.chunksize)/(mixer.samplerate)/2)
+                else:
+                    time.sleep(0.001)
 
 def stream1():
-    mix = Mixer()
-    song = Sound(mix, "test/test1.wav")
+    clock = Clock()
+
+    mix = Mixer(clock)
+    song = Sound(mix, "test/test1.wav",loop=5)
     song.live(1)
     mic = MicInput(mix)
     mic.live(1)
     speakers = Output(mix)
     speakers.start()
-    clock = Clock([mix])
-    clock.run()
 
 #To get device index please run audiodevicename.py
 
