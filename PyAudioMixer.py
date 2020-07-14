@@ -23,6 +23,7 @@ import threading
 import numpy
 import pyaudio
 
+__all__ = ['resample', 'interleave', 'uninterleave', 'stereo_to_mono', 'Sound', 'MicInput', 'Mixer', 'Output', 'Clock']
 
 def resample(smp, scale=1.0):
     """Resample a sound to be a different length
@@ -101,7 +102,7 @@ class Sound:
                 '-ac', str(mixer.channels),
                 'pipe:1']
         self.stream = subprocess.Popen(
-            play, stdout=subprocess.PIPE, bufsize=(10**8))
+            play, stdout=subprocess.PIPE)
 
     def set_duration(self, duration):
         self.duration = duration
@@ -287,7 +288,7 @@ class Output:
         self.mixer.lock.acquire()
 
         self.mixer.dests.remove(self)
-        self.stream.start_stream()
+        self.stream.stop_stream()
         self.pyaudio.terminate()
 
         self.mixer.lock.release()
