@@ -15,6 +15,9 @@ Released under the LGPL
 Modified by Nick Vahalik, 2014. Rewritten to allow for the creation of 
 multiple discrete mixers that can be used when needing to handle
 several different inputs and outputs.
+
+Modified by Jean-Pierre Coetzee, 2020. Updated to python 3.6 and 
+took development into a different direction.
 """
 
 import subprocess
