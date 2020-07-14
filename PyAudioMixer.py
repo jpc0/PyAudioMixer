@@ -28,7 +28,7 @@ import pyaudio
 
 __all__ = ['resample', 'interleave', 'uninterleave',
            'stereo_to_mono', 'Sound', 'MicInput', 'Mixer', 'Output', 'Clock',
-           'Raw_Data']
+           'Raw_PCM_In', 'Raw_PCM_Out']
 
 
 def resample(smp, scale=1.0):
@@ -91,17 +91,11 @@ def stereo_to_mono(left, right):
     return (0.5 * left + 0.5 * right).astype(numpy.int16)
 
 
-class Raw_Data:
-    def __init__(self, mixer, duration=-1):
+class Raw_PCM_In:
+    def __init__(self, mixer):
         self.mixer = mixer
-        self.duration = duration
         self.done = False
-        self.pos = 0
         self.data = [b'']
-
-    def set_duration(self, duration):
-        self.duration = duration
-        self.samples_remaining = duration * self.mixer.samplerate * self.mixer.channels
 
     def get_samples(self, number_of_samples_requested):
         try:
@@ -109,21 +103,16 @@ class Raw_Data:
         except:
             samples = numpy.fromstring(b'', dtype=numpy.int16)
 
-        self.pos += len(samples)
-
         if len(samples) < number_of_samples_requested:
             samples = numpy.append(samples, numpy.zeros(
                 number_of_samples_requested - len(samples), numpy.int16))
 
         return samples
 
-    def send_data(self, data):
+    def send_PCM(self, data):
         self.data.append(data)
 
-    def live(self, volume=.25):
-        self.play(-1, volume)
-
-    def play(self, duration=.5, volume=1.0, offset=0, fadein=0, envelope=None):
+    def play(self):
         self.mixer.lock.acquire()
         self.mixer.srcs.append(self)
         self.mixer.lock.release()
@@ -347,6 +336,21 @@ class Output:
         self.stream.write(data, self.mixer.chunksize)
 
 
+class Raw_PCM_Out:
+    def __init__(self, mixer,):
+        self.mixer = mixer
+        self.data = [b'']
+
+    def play_to(self, data):
+        self.data.append(data)
+
+    def get_PCM(self, data):
+        try:
+            return self.data.pop()
+        except:
+            return b''
+
+
 class Clock:
     def __init__(self):
         self.devices = []
@@ -376,7 +380,7 @@ def stream1():
 
 
 if __name__ == "__main__":
-    #Clock runs in a seperate thread
+    # Clock runs in a seperate thread
     clock = Clock()
     t1 = threading.Thread(target=stream1)
     t1.start()
