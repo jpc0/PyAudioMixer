@@ -129,8 +129,9 @@ class Raw_Data:
         self.mixer.lock.release()
 
     def stop(self):
-        self.channel.stop()
-        self.done = True
+        self.mixer.lock.acquire()
+        self.mixer.srcs.remove(self)
+        self.mixer.lock.release()
 
 
 class Sound:
