@@ -20,7 +20,10 @@ several different inputs and outputs.
 
 import time
 import wave
-import thread
+try:
+    import thread
+except:
+    import _thread as thread
 
 import numpy
 import pyaudio
@@ -465,7 +468,7 @@ class StreamingSound:
         2.
 
         """
-        stream = _create_stream(self.filename, self.checks)
+        stream = _create_stream(mixer=self.mixer, filename=self.filename, checks=self.checks)
         t = stream.total_time() * self.mixer.samplerate * 2 / 1000
         del(stream)
         return t
@@ -482,7 +485,7 @@ class StreamingSound:
         loops - how many times to play the sound (-1 is infinite)
 
         """
-        stream = _create_stream(self.filename, self.checks)
+        stream = _create_stream(mixer=self.mixer, filename=self.filename, checks=self.checks)
 
         if envelope != None:
             env = envelope
@@ -739,7 +742,7 @@ class DynamicGenerator:
     def get_length(self):
         return 0
     
-    def play(self, frequency, duration=.5, volume=.25, fadein=0, envelope=None):
+    def play(self, frequency, duration=.5, volume=.25, fadein=0, envelope=None, offset=0):
         """Play the sound stream
 
         Keyword arguments:
@@ -796,7 +799,7 @@ class _MicInput:
         if not self.samples_remaining < 0 and number_of_samples_requested > self.samples_remaining:
             number_of_samples = self.samples_remaining
 
-        samples = self.stream.read(int(number_of_samples) / self.mixer.channels)
+        samples = self.stream.read(int(number_of_samples / self.mixer.channels))
         samples = numpy.fromstring(samples, dtype=numpy.int16)
         self.pos += len(samples)
 
@@ -812,7 +815,7 @@ class _MicInput:
         return samples
 
 class MicInput(DynamicGenerator):
-    def __init__(self, mixer, pyaudio_input_device_id, checks=True):
+    def __init__(self, mixer, pyaudio_input_device_id=-1, checks=True, offset=0):
         DynamicGenerator.__init__(self, mixer, checks)
         #self.device_id = pyaudio_input_device_id
         self.src = _MicInput(mixer, pyaudio_input_device_id)
@@ -820,7 +823,7 @@ class MicInput(DynamicGenerator):
     def live(self, volume=.25):
         self.play(-1, volume)
 
-    def play(self, duration=.5, volume=.25, fadein=0, envelope=None):
+    def play(self, duration=.5, volume=.25, fadein=0, envelope=None, offset=0):
         """Play the sound stream
 
         Keyword arguments:
@@ -853,23 +856,23 @@ class MicInput(DynamicGenerator):
 
 if __name__ == "__main__":
     import sys
-    def log_uncaught_exceptions(ex_cls, ex, tb):
+    #def log_uncaught_exceptions(ex_cls, ex, tb):
+    #
+    #    print (''.join(traceback.format_tb(tb)))
+    #    print ('{0}: {1}'.format(ex_cls, ex))
 
-        print (''.join(traceback.format_tb(tb)))
-        print ('{0}: {1}'.format(ex_cls, ex))
-
-    sys.excepthook = log_uncaught_exceptions
+    #sys.excepthook = log_uncaught_exceptions
 
     mix = Mixer(stereo=False)
     mix.start()
-    mix2 = Mixer(stereo=False, output_device_index=4)
+    mix2 = Mixer(stereo=False)
     mix2.start()
 
-    mic = MicInput(mix2, 4)
+    mic = MicInput(mix2)
     mic.play(4, 2)
-    print "ho"
+    print("ho")
     time.sleep(5)
-    print "hey"
+    print("hey")
     mic.stop()
 
     #snd = FrequencyGenerator(mix)
