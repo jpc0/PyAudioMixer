@@ -23,7 +23,10 @@ import threading
 import numpy
 import pyaudio
 
-__all__ = ['resample', 'interleave', 'uninterleave', 'stereo_to_mono', 'Sound', 'MicInput', 'Mixer', 'Output', 'Clock']
+__all__ = ['resample', 'interleave', 'uninterleave',
+           'stereo_to_mono', 'Sound', 'MicInput', 'Mixer', 'Output', 'Clock',
+           'Raw_Data']
+
 
 def resample(smp, scale=1.0):
     """Resample a sound to be a different length
@@ -83,6 +86,48 @@ def uninterleave(data):
 def stereo_to_mono(left, right):
     """Return mono array from left and right sound stream arrays"""
     return (0.5 * left + 0.5 * right).astype(numpy.int16)
+
+
+class Raw_Data:
+    def __init__(self, mixer, duration=-1):
+        self.mixer = mixer
+        self.duration = duration
+        self.done = False
+        self.pos = 0
+        self.data = [b'']
+
+    def set_duration(self, duration):
+        self.duration = duration
+        self.samples_remaining = duration * self.mixer.samplerate * self.mixer.channels
+
+    def get_samples(self, number_of_samples_requested):
+        try:
+            samples = numpy.fromstring(self.data.pop(), dtype=numpy.int16)
+        except:
+            samples = numpy.fromstring(b'', dtype=numpy.int16)
+
+        self.pos += len(samples)
+
+        if len(samples) < number_of_samples_requested:
+            samples = numpy.append(samples, numpy.zeros(
+                number_of_samples_requested - len(samples), numpy.int16))
+
+        return samples
+
+    def send_data(self, data):
+        self.data.append(data)
+
+    def live(self, volume=.25):
+        self.play(-1, volume)
+
+    def play(self, duration=.5, volume=1.0, offset=0, fadein=0, envelope=None):
+        self.mixer.lock.acquire()
+        self.mixer.srcs.append(self)
+        self.mixer.lock.release()
+
+    def stop(self):
+        self.channel.stop()
+        self.done = True
 
 
 class Sound:
@@ -212,7 +257,7 @@ class Mixer:
         loud sources will cause distortion.
 
         Extra is for extra sound data to mix into output
-          
+
         Must be in numpy array of correct length
 
         """
