@@ -375,6 +375,7 @@ def stream1():
 
 
 if __name__ == "__main__":
+    #Clock runs in a seperate thread
     clock = Clock()
     t1 = threading.Thread(target=stream1)
     t1.start()
