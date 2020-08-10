@@ -366,6 +366,8 @@ class Clock:
                 mixer.tick()
             time.sleep(1/48000)
 
+'''
+Example Code
 
 def stream1():
     mix = Mixer(clock)
@@ -384,3 +386,4 @@ if __name__ == "__main__":
     clock = Clock()
     t1 = threading.Thread(target=stream1)
     t1.start()
+'''
