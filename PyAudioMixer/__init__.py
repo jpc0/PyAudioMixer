@@ -1,1 +1,1 @@
-from PyAudioMixer import *
+from PyAudioMixer.Main import *

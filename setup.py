@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="PyAudioMixer", # Replace with your own username
-    version="0.0.1-1",
+    version="0.0.3",
     author="Jean-Pierre Coetzee",
     author_email="jeanpierrec19@gmail.com",
     description="Advanced Realtime Software Mixer",
